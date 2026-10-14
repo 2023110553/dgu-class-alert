@@ -56,6 +56,7 @@ class AlarmScheduler(private val context: Context) {
     private fun pending(event: EventEntity, hours: Long, flags: Int): PendingIntent? {
         val intent = Intent(context, AlarmReceiver::class.java).putExtra("uid", event.uid).putExtra("title", event.title)
             .putExtra("type", event.type.name).putExtra("hours", hours)
+            .putExtra("course", CourseCatalog.label(context, event.category))
         return PendingIntent.getBroadcast(context, (event.uid + ":" + hours).hashCode(), intent, flags)
     }
     companion object { private const val TEST_REQUEST_CODE = 910_001 }
@@ -67,6 +68,7 @@ class AlarmReceiver : BroadcastReceiver() {
         val hours = intent.getLongExtra("hours", 0)
         val type = runCatching { EventType.valueOf(intent.getStringExtra("type")!!) }.getOrDefault(EventType.OTHER)
         val isTest = intent.getBooleanExtra("scheduled_test", false)
+        val course = intent.getStringExtra("course")
         val label = when {
             isTest -> "ClassAlert 예약 알림 테스트"
             type == EventType.ASSIGNMENT -> "과제 마감"
@@ -74,7 +76,9 @@ class AlarmReceiver : BroadcastReceiver() {
         }
         val open = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = NotificationCompat.Builder(context, NotificationChannels.DEADLINES)
-            .setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(if (isTest) label else label + " " + formatOffset(hours))
+            .setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(
+                if (isTest) label else (course?.let { "[$it] " }.orEmpty() + label + " " + formatOffset(hours))
+            )
             .setContentText(title).setStyle(NotificationCompat.BigTextStyle().bigText(title)).setAutoCancel(true).setContentIntent(open).build()
         context.getSystemService(NotificationManager::class.java).notify((intent.getStringExtra("uid") + hours).hashCode(), notification)
     }

@@ -7,4 +7,5 @@ app/build/
 *.jks
 *.keystore
 *.apk
+tmp/
 

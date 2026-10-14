@@ -20,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationCompat
@@ -115,8 +116,13 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(hidden, key = { it.uid }) { event ->
+                    val course = CourseCatalog.label(LocalContext.current, event.category)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) { Text(event.title); Text(formatDate(event.startsAt), style = MaterialTheme.typography.bodySmall) }
+                        Column(Modifier.weight(1f)) {
+                            course?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
+                            Text(event.title)
+                            Text(formatDate(event.startsAt), style = MaterialTheme.typography.bodySmall)
+                        }
                         TextButton(onClick = { vm.restore(event) }) { Text("복원") }
                     }
                 }
@@ -129,10 +135,12 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
 @Composable private fun EventList(events: List<EventEntity>, hide: (EventEntity) -> Unit) = LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     items(events, key = { it.uid }) { e ->
         var showDetails by remember { mutableStateOf(false) }
+        val course = CourseCatalog.label(LocalContext.current, e.category)
         Card(onClick = { showDetails = true }, modifier = Modifier.fillMaxWidth()) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(if (e.type == EventType.ASSIGNMENT) Icons.Default.Edit else Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary)
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 Text(if (e.type == EventType.LECTURE_END) "온라인 강의 학습 종료 예정" else if (e.type == EventType.ASSIGNMENT) "과제" else e.type.name, style = MaterialTheme.typography.labelMedium)
+                course?.let { Text(it, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary) }
                 Text(e.title, style = MaterialTheme.typography.titleMedium)
                 Text(formatDate(e.startsAt), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("눌러서 상세 보기", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
@@ -143,6 +151,7 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
             title = { Text(e.title) },
             text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(if (e.type == EventType.LECTURE_END) "온라인 강의 학습 종료 예정" else if (e.type == EventType.ASSIGNMENT) "과제" else "일정")
+                course?.let { Text("과목: $it") }
                 Text("일시: ${formatDate(e.startsAt)}")
                 if (e.description.isNotBlank()) Text(e.description)
                 Text("숨기면 홈과 전체 일정에서 사라지며 예약 알림도 취소됩니다. 숨긴 일정 목록에서 언제든 복원할 수 있습니다.", style = MaterialTheme.typography.bodySmall)
