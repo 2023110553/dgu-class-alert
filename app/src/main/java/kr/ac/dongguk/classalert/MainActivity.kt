@@ -14,6 +14,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -42,6 +44,7 @@ data class UiState(val events: List<EventEntity> = emptyList(), val syncing: Boo
 class MainViewModel(app: android.app.Application) : AndroidViewModel(app) {
     private val root = app as ClassAlertApp
     private val status = MutableStateFlow(Pair(false, null as String?))
+    val syncStatus = status.asStateFlow()
     val home = combine(root.repository.upcoming(), status) { events, s -> UiState(events, s.first, s.second) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
     val all = root.repository.all().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -57,9 +60,13 @@ class MainViewModel(app: android.app.Application) : AndroidViewModel(app) {
         val previousOffsets = root.settings.alertOffsetsHours
         root.settings.calendarUrl = url.trim()
         root.settings.alertOffsetsHours = offsets.split(',').mapNotNull { it.trim().toLongOrNull() }.filter { it > 0 }
+        status.value = true to null
         viewModelScope.launch {
-            root.repository.rescheduleAlarms(previousOffsets)
-            sync()
+            val result = runCatching {
+                root.repository.rescheduleAlarms(previousOffsets)
+                root.repository.sync().getOrThrow()
+            }
+            status.value = false to result.fold({ "${it}개 일정 저장·동기화 완료" }, { it.message ?: "저장·동기화 실패" })
         }
     }
     fun hide(event: EventEntity) = viewModelScope.launch { root.repository.hide(event) }
@@ -178,6 +185,7 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
 @Composable private fun Settings(vm: MainViewModel, testNotification: () -> Unit) {
     val context = LocalContext.current
     val events by vm.all.collectAsState()
+    val syncStatus by vm.syncStatus.collectAsState()
     var url by remember { mutableStateOf(vm.settings.calendarUrl.orEmpty()) }
     var offsets by remember { mutableStateOf(vm.settings.alertOffsetsHours.joinToString(",")) }
     var assignments by remember { mutableStateOf(vm.settings.assignmentAlerts) }
@@ -186,6 +194,8 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
     var scheduleAfterPermission by remember { mutableStateOf(false) }
     var showCourseNames by remember { mutableStateOf(false) }
     var exactAlarmGranted by remember { mutableStateOf(Build.VERSION.SDK_INT < 31 || context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()) }
+    var saveRequested by remember { mutableStateOf(false) }
+    var validationMessage by remember { mutableStateOf<String?>(null) }
     DisposableEffect(Unit) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) exactAlarmGranted = Build.VERSION.SDK_INT < 31 || context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
@@ -201,7 +211,7 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
             } else testNotification()
         }
     }
-    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("설정", style = MaterialTheme.typography.headlineMedium)
         OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth(), label = { Text("eClass 캘린더 내보내기 URL") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
         Text("URL에는 개인 토큰이 포함됩니다. 기기 내 Android Keystore로 암호화하며 화면에는 숨깁니다.", style = MaterialTheme.typography.bodySmall)
@@ -215,7 +225,32 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
                 context.startActivity(Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}")))
             }, Modifier.fillMaxWidth()) { Text("정확한 알람 권한 켜기") }
         }
-        Button(onClick = { vm.save(url, offsets) }, Modifier.fillMaxWidth()) { Text("저장하고 동기화") }
+        Button(onClick = {
+            val parsedOffsets = offsets.split(',').map { it.trim() }
+            validationMessage = when {
+                !url.trim().startsWith("https://eclass.dongguk.edu/calendar/export_execute.php") -> "eClass 캘린더 URL을 확인해 주세요."
+                parsedOffsets.isEmpty() || parsedOffsets.any { it.toLongOrNull()?.let { value -> value <= 0 } != false } -> "알림 시간을 0보다 큰 숫자로 입력해 주세요. 예: 72,24,3"
+                else -> null
+            }
+            if (validationMessage == null) { saveRequested = true; vm.save(url, offsets) }
+        }, Modifier.fillMaxWidth(), enabled = !syncStatus.first) {
+            if (syncStatus.first && saveRequested) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                Spacer(Modifier.width(8.dp))
+                Text("저장·동기화 중…")
+            } else Text("저장하고 동기화")
+        }
+        validationMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        if (saveRequested && !syncStatus.first && syncStatus.second != null) {
+            val succeeded = syncStatus.second!!.endsWith("완료")
+            Surface(Modifier.fillMaxWidth(), color = if (succeeded) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.medium) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(if (succeeded) Icons.Default.CheckCircle else Icons.Default.Warning, null, tint = if (succeeded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.width(10.dp))
+                    Text(syncStatus.second!!)
+                }
+            }
+        }
         OutlinedButton(onClick = {
             val context = vm.getApplication<android.app.Application>()
             scheduleAfterPermission = false
