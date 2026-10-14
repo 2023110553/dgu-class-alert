@@ -41,6 +41,7 @@ class MainViewModel(app: android.app.Application) : AndroidViewModel(app) {
     val home = combine(root.repository.upcoming(), status) { events, s -> UiState(events, s.first, s.second) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
     val all = root.repository.all().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val hidden = root.repository.hidden().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val settings get() = root.settings
     init { if (settings.calendarUrl != null) sync() }
     fun sync() = viewModelScope.launch {
@@ -54,6 +55,8 @@ class MainViewModel(app: android.app.Application) : AndroidViewModel(app) {
         sync()
     }
     fun hide(event: EventEntity) = viewModelScope.launch { root.repository.hide(event) }
+    fun restore(event: EventEntity) = viewModelScope.launch { root.repository.restore(event) }
+    fun scheduleTestAlarm(): Boolean = root.alarms.scheduleTest()
 }
 
 class MainActivity : ComponentActivity() {
@@ -96,20 +99,57 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
 
 @Composable private fun AllEvents(vm: MainViewModel) {
     val events by vm.all.collectAsState()
-    Column(Modifier.fillMaxSize().padding(20.dp)) { Text("전체 일정", style = MaterialTheme.typography.headlineMedium); Spacer(Modifier.height(12.dp)); if (events.isEmpty()) EmptyState() else EventList(events, vm::hide) }
+    val hidden by vm.hidden.collectAsState()
+    var showHidden by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().padding(20.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("전체 일정", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+            if (hidden.isNotEmpty()) TextButton(onClick = { showHidden = true }) { Text("숨긴 일정 ${hidden.size}개") }
+        }
+        Spacer(Modifier.height(12.dp))
+        if (events.isEmpty()) EmptyState() else EventList(events, vm::hide)
+    }
+    if (showHidden) AlertDialog(
+        onDismissRequest = { showHidden = false },
+        title = { Text("숨긴 일정") },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(hidden, key = { it.uid }) { event ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) { Text(event.title); Text(formatDate(event.startsAt), style = MaterialTheme.typography.bodySmall) }
+                        TextButton(onClick = { vm.restore(event) }) { Text("복원") }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { showHidden = false }) { Text("닫기") } }
+    )
 }
 
 @Composable private fun EventList(events: List<EventEntity>, hide: (EventEntity) -> Unit) = LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     items(events, key = { it.uid }) { e ->
-        Card(Modifier.fillMaxWidth()) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        var showDetails by remember { mutableStateOf(false) }
+        Card(onClick = { showDetails = true }, modifier = Modifier.fillMaxWidth()) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(if (e.type == EventType.ASSIGNMENT) Icons.Default.Edit else Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary)
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 Text(if (e.type == EventType.LECTURE_END) "온라인 강의 학습 종료 예정" else if (e.type == EventType.ASSIGNMENT) "과제" else e.type.name, style = MaterialTheme.typography.labelMedium)
                 Text(e.title, style = MaterialTheme.typography.titleMedium)
                 Text(formatDate(e.startsAt), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("눌러서 상세 보기", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             }
-            IconButton(onClick = { hide(e) }) { Icon(Icons.Default.VisibilityOff, "숨기기") }
         } }
+        if (showDetails) AlertDialog(
+            onDismissRequest = { showDetails = false },
+            title = { Text(e.title) },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(if (e.type == EventType.LECTURE_END) "온라인 강의 학습 종료 예정" else if (e.type == EventType.ASSIGNMENT) "과제" else "일정")
+                Text("일시: ${formatDate(e.startsAt)}")
+                if (e.description.isNotBlank()) Text(e.description)
+                Text("숨기면 홈과 전체 일정에서 사라지며 예약 알림도 취소됩니다. 숨긴 일정 목록에서 언제든 복원할 수 있습니다.", style = MaterialTheme.typography.bodySmall)
+            } },
+            confirmButton = { TextButton(onClick = { hide(e); showDetails = false }) { Text("이 일정 숨기기", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { showDetails = false }) { Text("닫기") } }
+        )
     }
 }
 
@@ -120,7 +160,16 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
     var offsets by remember { mutableStateOf(vm.settings.alertOffsetsHours.joinToString(",")) }
     var assignments by remember { mutableStateOf(vm.settings.assignmentAlerts) }
     var lectures by remember { mutableStateOf(vm.settings.lectureAlerts) }
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) testNotification() }
+    var scheduledMessage by remember { mutableStateOf<String?>(null) }
+    var scheduleAfterPermission by remember { mutableStateOf(false) }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            if (scheduleAfterPermission) {
+                val exact = vm.scheduleTestAlarm()
+                scheduledMessage = if (exact) "1분 뒤 예약 알림을 보냅니다." else "1분 뒤 알림을 예약했습니다. 정확한 알람 권한이 없어 조금 늦을 수 있습니다."
+            } else testNotification()
+        }
+    }
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("설정", style = MaterialTheme.typography.headlineMedium)
         OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth(), label = { Text("eClass 캘린더 내보내기 URL") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
@@ -131,8 +180,20 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
         Button(onClick = { vm.save(url, offsets) }, Modifier.fillMaxWidth()) { Text("저장하고 동기화") }
         OutlinedButton(onClick = {
             val context = vm.getApplication<android.app.Application>()
+            scheduleAfterPermission = false
             if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) permission.launch(Manifest.permission.POST_NOTIFICATIONS) else testNotification()
         }, Modifier.fillMaxWidth()) { Text("테스트 알림 보내기") }
+        OutlinedButton(onClick = {
+            val context = vm.getApplication<android.app.Application>()
+            scheduleAfterPermission = true
+            if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                val exact = vm.scheduleTestAlarm()
+                scheduledMessage = if (exact) "1분 뒤 예약 알림을 보냅니다. 앱을 닫고 기다려 보세요." else "1분 뒤 알림을 예약했습니다. 정확한 알람 권한이 없어 조금 늦을 수 있습니다."
+            }
+        }, Modifier.fillMaxWidth()) { Text("1분 뒤 예약 알림 테스트") }
+        scheduledMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
         Text("백그라운드 동기화는 배터리 정책에 따라 늦어질 수 있습니다. 정확한 알람 권한이 없으면 시스템이 알림을 지연할 수 있으며, 앱을 강제 종료한 경우 제조사 정책에 따라 동작이 제한될 수 있습니다.", style = MaterialTheme.typography.bodySmall)
     }
 }

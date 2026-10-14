@@ -16,6 +16,7 @@ class EventRepository(
 ) {
     fun upcoming(days: Long = 14): Flow<List<EventEntity>> = db.events().observeRange(System.currentTimeMillis(), System.currentTimeMillis() + days * 86_400_000)
     fun all(): Flow<List<EventEntity>> = db.events().observeAll()
+    fun hidden(): Flow<List<EventEntity>> = db.events().observeHidden()
 
     suspend fun sync(): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
@@ -42,5 +43,9 @@ class EventRepository(
 
     suspend fun restoreAlarms() = db.events().all().forEach { alarms.schedule(it, settings) }
     suspend fun hide(event: EventEntity) { db.events().setHidden(event.uid, true); alarms.cancel(event) }
+    suspend fun restore(event: EventEntity) {
+        db.events().setHidden(event.uid, false)
+        alarms.schedule(event.copy(hidden = false), settings)
+    }
 }
 

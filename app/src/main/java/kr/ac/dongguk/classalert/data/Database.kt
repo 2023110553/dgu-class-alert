@@ -12,6 +12,7 @@ class Converters {
 @Dao
 interface EventDao {
     @Query("SELECT * FROM events WHERE hidden = 0 ORDER BY startsAt") fun observeAll(): Flow<List<EventEntity>>
+    @Query("SELECT * FROM events WHERE hidden = 1 ORDER BY startsAt") fun observeHidden(): Flow<List<EventEntity>>
     @Query("SELECT * FROM events WHERE hidden = 0 AND startsAt BETWEEN :from AND :to ORDER BY startsAt") fun observeRange(from: Long, to: Long): Flow<List<EventEntity>>
     @Query("SELECT * FROM events") suspend fun all(): List<EventEntity>
     @Query("SELECT * FROM events WHERE uid = :uid") suspend fun byId(uid: String): EventEntity?

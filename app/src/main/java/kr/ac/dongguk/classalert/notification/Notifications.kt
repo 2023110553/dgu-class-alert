@@ -34,6 +34,20 @@ class AlarmScheduler(private val context: Context) {
     fun cancel(event: EventEntity) = listOf(72L, 24L, 3L).plus(SecureSettings(context).alertOffsetsHours).distinct().forEach {
         pending(event, it, PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)?.let(manager::cancel)
     }
+    fun scheduleTest(delayMillis: Long = 60_000L): Boolean {
+        val intent = Intent(context, AlarmReceiver::class.java)
+            .putExtra("uid", "scheduled-test")
+            .putExtra("title", "1분 예약 알림이 정상 작동했습니다.")
+            .putExtra("type", EventType.OTHER.name)
+            .putExtra("hours", 0L)
+            .putExtra("scheduled_test", true)
+        val pending = PendingIntent.getBroadcast(context, TEST_REQUEST_CODE, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val at = System.currentTimeMillis() + delayMillis
+        val exact = Build.VERSION.SDK_INT < 31 || manager.canScheduleExactAlarms()
+        if (exact) manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pending)
+        else manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pending)
+        return exact
+    }
     private fun enabled(type: EventType, s: SecureSettings) = when (type) {
         EventType.ASSIGNMENT -> s.assignmentAlerts
         EventType.LECTURE_END -> s.lectureAlerts
@@ -44,6 +58,7 @@ class AlarmScheduler(private val context: Context) {
             .putExtra("type", event.type.name).putExtra("hours", hours)
         return PendingIntent.getBroadcast(context, (event.uid + ":" + hours).hashCode(), intent, flags)
     }
+    companion object { private const val TEST_REQUEST_CODE = 910_001 }
 }
 
 class AlarmReceiver : BroadcastReceiver() {
@@ -51,10 +66,15 @@ class AlarmReceiver : BroadcastReceiver() {
         val title = intent.getStringExtra("title") ?: "학습 일정"
         val hours = intent.getLongExtra("hours", 0)
         val type = runCatching { EventType.valueOf(intent.getStringExtra("type")!!) }.getOrDefault(EventType.OTHER)
-        val label = if (type == EventType.ASSIGNMENT) "과제 마감" else "온라인 강의 학습 종료 예정"
+        val isTest = intent.getBooleanExtra("scheduled_test", false)
+        val label = when {
+            isTest -> "ClassAlert 예약 알림 테스트"
+            type == EventType.ASSIGNMENT -> "과제 마감"
+            else -> "온라인 강의 학습 종료 예정"
+        }
         val open = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = NotificationCompat.Builder(context, NotificationChannels.DEADLINES)
-            .setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(label + " " + formatOffset(hours))
+            .setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(if (isTest) label else label + " " + formatOffset(hours))
             .setContentText(title).setStyle(NotificationCompat.BigTextStyle().bigText(title)).setAutoCancel(true).setContentIntent(open).build()
         context.getSystemService(NotificationManager::class.java).notify((intent.getStringExtra("uid") + hours).hashCode(), notification)
     }
