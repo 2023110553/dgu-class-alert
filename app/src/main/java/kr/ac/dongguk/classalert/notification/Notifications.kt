@@ -33,7 +33,7 @@ class AlarmScheduler(private val context: Context) {
             }
         }
     }
-    fun cancel(event: EventEntity) = listOf(72L, 24L, 3L).plus(SecureSettings(context).alertOffsetsHours).distinct().forEach {
+    fun cancel(event: EventEntity, offsets: List<Long> = SecureSettings(context).alertOffsetsHours) = listOf(72L, 24L, 3L).plus(offsets).distinct().forEach {
         pending(event, it, PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)?.let(manager::cancel)
     }
     fun scheduleTest(delayMillis: Long = 60_000L): Boolean {

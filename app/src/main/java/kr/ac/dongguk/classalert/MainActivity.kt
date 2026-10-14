@@ -1,8 +1,11 @@
 package kr.ac.dongguk.classalert
 
 import android.Manifest
+import android.app.AlarmManager
 import android.app.NotificationManager
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -51,9 +54,13 @@ class MainViewModel(app: android.app.Application) : AndroidViewModel(app) {
         status.value = false to result.fold({ it.toString() + "개 일정을 동기화했습니다." }, { it.message ?: "동기화 실패" })
     }
     fun save(url: String, offsets: String) {
+        val previousOffsets = root.settings.alertOffsetsHours
         root.settings.calendarUrl = url.trim()
         root.settings.alertOffsetsHours = offsets.split(',').mapNotNull { it.trim().toLongOrNull() }.filter { it > 0 }
-        sync()
+        viewModelScope.launch {
+            root.repository.rescheduleAlarms(previousOffsets)
+            sync()
+        }
     }
     fun hide(event: EventEntity) = viewModelScope.launch { root.repository.hide(event) }
     fun restore(event: EventEntity) = viewModelScope.launch { root.repository.restore(event) }
@@ -169,6 +176,7 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
 @Composable private fun EmptyState() = Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("표시할 일정이 없습니다.\n설정에서 캘린더 URL을 등록해 주세요.") }
 
 @Composable private fun Settings(vm: MainViewModel, testNotification: () -> Unit) {
+    val context = LocalContext.current
     val events by vm.all.collectAsState()
     var url by remember { mutableStateOf(vm.settings.calendarUrl.orEmpty()) }
     var offsets by remember { mutableStateOf(vm.settings.alertOffsetsHours.joinToString(",")) }
@@ -177,6 +185,14 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
     var scheduledMessage by remember { mutableStateOf<String?>(null) }
     var scheduleAfterPermission by remember { mutableStateOf(false) }
     var showCourseNames by remember { mutableStateOf(false) }
+    var exactAlarmGranted by remember { mutableStateOf(Build.VERSION.SDK_INT < 31 || context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()) }
+    DisposableEffect(Unit) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) exactAlarmGranted = Build.VERSION.SDK_INT < 31 || context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
+        }
+        (context as ComponentActivity).lifecycle.addObserver(observer)
+        onDispose { context.lifecycle.removeObserver(observer) }
+    }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
             if (scheduleAfterPermission) {
@@ -193,6 +209,12 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
         Row(verticalAlignment = Alignment.CenterVertically) { Text("과제 알림", Modifier.weight(1f)); Switch(assignments, { assignments = it; vm.settings.assignmentAlerts = it }) }
         Row(verticalAlignment = Alignment.CenterVertically) { Text("온라인 강의 종료 알림", Modifier.weight(1f)); Switch(lectures, { lectures = it; vm.settings.lectureAlerts = it }) }
         OutlinedButton(onClick = { showCourseNames = true }, Modifier.fillMaxWidth()) { Text("과목명 관리") }
+        if (!exactAlarmGranted && Build.VERSION.SDK_INT >= 31) {
+            Text("정확한 알람 권한이 없어 알림이 늦게 오거나 앱을 열 때 몰려서 올 수 있습니다.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = {
+                context.startActivity(Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}")))
+            }, Modifier.fillMaxWidth()) { Text("정확한 알람 권한 켜기") }
+        }
         Button(onClick = { vm.save(url, offsets) }, Modifier.fillMaxWidth()) { Text("저장하고 동기화") }
         OutlinedButton(onClick = {
             val context = vm.getApplication<android.app.Application>()

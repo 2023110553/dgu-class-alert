@@ -49,6 +49,10 @@ class EventRepository(
     }
 
     suspend fun restoreAlarms() = db.events().all().forEach { alarms.schedule(it, settings) }
+    suspend fun rescheduleAlarms(previousOffsets: List<Long>) = db.events().all().forEach { event ->
+        alarms.cancel(event, previousOffsets + settings.alertOffsetsHours)
+        alarms.schedule(event, settings)
+    }
     suspend fun hide(event: EventEntity) { db.events().setHidden(event.uid, true); alarms.cancel(event) }
     suspend fun restore(event: EventEntity) {
         db.events().setHidden(event.uid, false)
