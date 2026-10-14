@@ -23,7 +23,14 @@ class EventRepository(
             val url = settings.calendarUrl ?: error("설정에서 eClass 캘린더 URL을 등록해 주세요.")
             require(url.startsWith("https://eclass.dongguk.edu/calendar/export_execute.php")) { "동국대학교 eClass 캘린더 내보내기 URL만 사용할 수 있습니다." }
             val response = client.newCall(Request.Builder().url(url).build()).execute()
-            response.use { require(it.isSuccessful) { "서버 응답 오류: ${it.code}" }; IcsParser.parse(it.body.string()) }
+            response.use {
+                require(it.isSuccessful) {
+                    if (it.code == 401 || it.code == 403) "캘린더 토큰이 만료되었거나 유효하지 않습니다. eClass에서 URL을 다시 발급해 주세요." else "서버 응답 오류: ${it.code}"
+                }
+                val raw = it.body.string()
+                require(raw.contains("BEGIN:VCALENDAR")) { "캘린더 토큰이 만료되었거나 응답이 올바르지 않습니다. eClass에서 URL을 다시 발급해 주세요." }
+                IcsParser.parse(raw)
+            }
         }.mapCatching { parsed ->
             val now = System.currentTimeMillis()
             db.withTransaction {

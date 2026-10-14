@@ -11,10 +11,12 @@ import java.time.Duration
 
 object NotificationChannels {
     const val DEADLINES = "deadlines"
+    const val SYNC_ERRORS = "sync_errors"
     fun create(context: Context) {
-        if (Build.VERSION.SDK_INT >= 26) context.getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(DEADLINES, "학습 마감 알림", NotificationManager.IMPORTANCE_HIGH).apply { description = "과제와 온라인 강의 학습 종료 예정 알림" }
-        )
+        if (Build.VERSION.SDK_INT >= 26) context.getSystemService(NotificationManager::class.java).apply {
+            createNotificationChannel(NotificationChannel(DEADLINES, "학습 마감 알림", NotificationManager.IMPORTANCE_HIGH).apply { description = "과제와 온라인 강의 학습 종료 예정 알림" })
+            createNotificationChannel(NotificationChannel(SYNC_ERRORS, "동기화 문제", NotificationManager.IMPORTANCE_DEFAULT).apply { description = "토큰 만료 등 eClass 동기화 문제" })
+        }
     }
 }
 

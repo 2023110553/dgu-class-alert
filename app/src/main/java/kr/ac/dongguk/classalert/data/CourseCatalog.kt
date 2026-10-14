@@ -13,7 +13,7 @@ object CourseCatalog {
 
     fun label(context: Context, category: String?): String? {
         val code = extractCode(category) ?: return null
-        return courses(context)[code] ?: code
+        return SecureSettings(context).courseAlias(code) ?: courses(context)[code] ?: code
     }
 
     private fun courses(context: Context): Map<String, String> = cached ?: synchronized(this) {

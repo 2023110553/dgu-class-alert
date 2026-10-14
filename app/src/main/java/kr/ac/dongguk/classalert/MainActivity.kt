@@ -57,6 +57,10 @@ class MainViewModel(app: android.app.Application) : AndroidViewModel(app) {
     }
     fun hide(event: EventEntity) = viewModelScope.launch { root.repository.hide(event) }
     fun restore(event: EventEntity) = viewModelScope.launch { root.repository.restore(event) }
+    fun setCourseAlias(code: String, name: String) = viewModelScope.launch {
+        root.settings.setCourseAlias(code, name)
+        root.repository.restoreAlarms()
+    }
     fun scheduleTestAlarm(): Boolean = root.alarms.scheduleTest()
 }
 
@@ -165,12 +169,14 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
 @Composable private fun EmptyState() = Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("표시할 일정이 없습니다.\n설정에서 캘린더 URL을 등록해 주세요.") }
 
 @Composable private fun Settings(vm: MainViewModel, testNotification: () -> Unit) {
+    val events by vm.all.collectAsState()
     var url by remember { mutableStateOf(vm.settings.calendarUrl.orEmpty()) }
     var offsets by remember { mutableStateOf(vm.settings.alertOffsetsHours.joinToString(",")) }
     var assignments by remember { mutableStateOf(vm.settings.assignmentAlerts) }
     var lectures by remember { mutableStateOf(vm.settings.lectureAlerts) }
     var scheduledMessage by remember { mutableStateOf<String?>(null) }
     var scheduleAfterPermission by remember { mutableStateOf(false) }
+    var showCourseNames by remember { mutableStateOf(false) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
             if (scheduleAfterPermission) {
@@ -186,6 +192,7 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
         OutlinedTextField(offsets, { offsets = it }, Modifier.fillMaxWidth(), label = { Text("알림 시점(시간 전, 쉼표 구분)") }, supportingText = { Text("기본값: 72,24,3") })
         Row(verticalAlignment = Alignment.CenterVertically) { Text("과제 알림", Modifier.weight(1f)); Switch(assignments, { assignments = it; vm.settings.assignmentAlerts = it }) }
         Row(verticalAlignment = Alignment.CenterVertically) { Text("온라인 강의 종료 알림", Modifier.weight(1f)); Switch(lectures, { lectures = it; vm.settings.lectureAlerts = it }) }
+        OutlinedButton(onClick = { showCourseNames = true }, Modifier.fillMaxWidth()) { Text("과목명 관리") }
         Button(onClick = { vm.save(url, offsets) }, Modifier.fillMaxWidth()) { Text("저장하고 동기화") }
         OutlinedButton(onClick = {
             val context = vm.getApplication<android.app.Application>()
@@ -205,6 +212,34 @@ private fun ClassAlertUi(vm: MainViewModel, testNotification: () -> Unit) {
         scheduledMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
         Text("백그라운드 동기화는 배터리 정책에 따라 늦어질 수 있습니다. 정확한 알람 권한이 없으면 시스템이 알림을 지연할 수 있으며, 앱을 강제 종료한 경우 제조사 정책에 따라 동작이 제한될 수 있습니다.", style = MaterialTheme.typography.bodySmall)
     }
+    if (showCourseNames) CourseNameDialog(events, vm, { showCourseNames = false })
+}
+
+@Composable private fun CourseNameDialog(events: List<EventEntity>, vm: MainViewModel, close: () -> Unit) {
+    val context = LocalContext.current
+    val codes = remember(events) { events.mapNotNull { CourseCatalog.extractCode(it.category) }.distinct().sorted() }
+    val values = remember(codes) { mutableStateMapOf<String, String>().apply {
+        codes.forEach { code -> put(code, vm.settings.courseAlias(code) ?: CourseCatalog.label(context, code).orEmpty()) }
+    } }
+    AlertDialog(
+        onDismissRequest = close,
+        title = { Text("과목명 관리") },
+        text = {
+            if (codes.isEmpty()) Text("먼저 일정을 동기화해 주세요.") else LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(codes, key = { it }) { code ->
+                    OutlinedTextField(
+                        value = values[code].orEmpty(),
+                        onValueChange = { values[code] = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(code) },
+                        singleLine = true
+                    )
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { codes.forEach { vm.setCourseAlias(it, values[it].orEmpty()) }; close() }) { Text("저장") } },
+        dismissButton = { TextButton(onClick = close) { Text("취소") } }
+    )
 }
 
 private fun formatDate(epoch: Long): String = Instant.ofEpochMilli(epoch).atZone(ZoneId.of("Asia/Seoul")).format(DateTimeFormatter.ofPattern("M월 d일 (E) HH:mm"))

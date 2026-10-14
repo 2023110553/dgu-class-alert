@@ -2,6 +2,7 @@ package kr.ac.dongguk.classalert.data
 
 import android.content.Context
 import android.util.Base64
+import org.json.JSONObject
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -30,6 +31,15 @@ class SecureSettings(context: Context) {
     var lastError: String?
         get() = normal.getString("last_error", null)
         set(v) { normal.edit().putString("last_error", v).apply() }
+
+    fun courseAlias(code: String): String? = JSONObject(normal.getString("course_aliases", "{}") ?: "{}")
+        .optString(code).trim().takeIf { it.isNotEmpty() }
+
+    fun setCourseAlias(code: String, name: String) {
+        val aliases = JSONObject(normal.getString("course_aliases", "{}") ?: "{}")
+        if (name.isBlank()) aliases.remove(code) else aliases.put(code, name.trim())
+        normal.edit().putString("course_aliases", aliases.toString()).apply()
+    }
 
     private fun key(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
